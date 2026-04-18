@@ -1,56 +1,66 @@
 // Package sync orchestrates reading secrets from Vault and writing them
-// to a local .env file, with optional audit logging.
+// to a local .env file, optionally merging with existing values.
 package sync
 
 import (
 	"fmt"
+	"log"
 
-	"github.com/yourusername/vaultpipe/internal/audit"
-	"github.com/yourusername/vaultpipe/internal/config"
-	"github.com/yourusername/vaultpipe/internal/dotenv"
-	"github.com/yourusername/vaultpipe/internal/vault"
+	"github.com/your-org/vaultpipe/internal/audit"
+	"github.com/your-org/vaultpipe/internal/config"
+	"github.com/your-org/vaultpipe/internal/dotenv"
+	"github.com/your-org/vaultpipe/internal/vault"
 )
 
-// VaultReader is the interface for reading secrets.
-type VaultReader interface {
-	ReadSecrets(path string) (map[string]string, error)
-}
-
-// Syncer coordinates the sync operation.
+// Syncer holds dependencies for a sync run.
 type Syncer struct {
 	cfg    *config.Config
-	vault  VaultReader
-	writer *dotenv.Writer
-	audit  *audit.Logger
+	logger *audit.Logger
 }
 
-// New constructs a Syncer from the given config.
-func New(cfg *config.Config, auditLog *audit.Logger) (*Syncer, error) {
-	v, err := vault.NewClient(cfg.VaultAddress, cfg.VaultToken)
-	if err != nil {
-		return nil, fmt.Errorf("syncer: init vault client: %w", err)
-	}
-	w, err := dotenv.NewWriter(cfg.OutputFile)
-	if err != nil {
-		return nil, fmt.Errorf("syncer: init writer: %w", err)
-	}
-	if auditLog == nil {
-		auditLog, _ = audit.NewLogger("")
-	}
-	return &Syncer{cfg: cfg, vault: v, writer: w, audit: auditLog}, nil
+// New creates a Syncer with the given config and audit logger.
+func New(cfg *config.Config, logger *audit.Logger) *Syncer {
+	return &Syncer{cfg: cfg, logger: logger}
 }
 
-// Run performs the secret sync.
+// Run performs the full sync: fetch secrets, diff, merge, write.
 func (s *Syncer) Run() error {
-	secrets, err := s.vault.ReadSecrets(s.cfg.SecretPath)
+	client, err := vault.NewClient(s.cfg.VaultAddress, s.cfg.VaultToken)
 	if err != nil {
-		_ = s.audit.LogError(s.cfg.SecretPath, err)
-		return fmt.Errorf("syncer: read secrets: %w", err)
+		s.logger.LogError("vault_client", err)
+		return fmt.Errorf("vault client: %w", err)
 	}
-	if err := s.writer.Write(secrets); err != nil {
-		_ = s.audit.LogError(s.cfg.SecretPath, err)
-		return fmt.Errorf("syncer: write env: %w", err)
+
+	incoming, err := client.ReadSecrets(s.cfg.SecretPath)
+	if err != nil {
+		s.logger.LogError("read_secrets", err)
+		return fmt.Errorf("read secrets: %w", err)
 	}
-	_ = s.audit.LogSync(s.cfg.SecretPath, s.cfg.OutputFile, len(secrets))
+
+	existing := map[string]string{}
+	if s.cfg.OutputFile != "" {
+		if ex, readErr := dotenv.Read(s.cfg.OutputFile); readErr == nil {
+			existing = ex
+		}
+	}
+
+	entries := dotenv.Diff(existing, incoming)
+	summary := dotenv.Summary(entries)
+	log.Printf("diff summary: added=%d updated=%d removed=%d unchanged=%d",
+		summary[dotenv.ChangeAdded],
+		summary[dotenv.ChangeUpdated],
+		summary[dotenv.ChangeRemoved],
+		summary[dotenv.ChangeUnchanged],
+	)
+
+	merged := dotenv.Merge(existing, incoming, s.cfg.OverwriteExisting)
+
+	w := dotenv.NewWriter(s.cfg.OutputFile)
+	if err := w.Write(merged); err != nil {
+		s.logger.LogError("write_env", err)
+		return fmt.Errorf("write env: %w", err)
+	}
+
+	s.logger.LogSync(s.cfg.SecretPath, s.cfg.OutputFile, len(merged))
 	return nil
 }
