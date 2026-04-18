@@ -1,54 +1,56 @@
+// Package sync orchestrates reading secrets from Vault and writing them
+// to a local .env file, with optional audit logging.
 package sync
 
 import (
 	"fmt"
 
-	"github.com/vaultpipe/internal/config"
-	"github.com/vaultpipe/internal/dotenv"
-	"github.com/vaultpipe/internal/vault"
+	"github.com/yourusername/vaultpipe/internal/audit"
+	"github.com/yourusername/vaultpipe/internal/config"
+	"github.com/yourusername/vaultpipe/internal/dotenv"
+	"github.com/yourusername/vaultpipe/internal/vault"
 )
 
-// Result holds the outcome of a sync operation.
-type Result struct {
-	SecretsCount int
-	OutputFile   string
+// VaultReader is the interface for reading secrets.
+type VaultReader interface {
+	ReadSecrets(path string) (map[string]string, error)
 }
 
-// Syncer orchestrates reading secrets from Vault and writing them to a .env file.
+// Syncer coordinates the sync operation.
 type Syncer struct {
-	client *vault.Client
-	writer *dotenv.Writer
 	cfg    *config.Config
+	vault  VaultReader
+	writer *dotenv.Writer
+	audit  *audit.Logger
 }
 
-// New creates a Syncer from the provided configuration.
-func New(cfg *config.Config) (*Syncer, error) {
-	client, err := vault.NewClient(cfg.VaultAddress, cfg.VaultToken)
+// New constructs a Syncer from the given config.
+func New(cfg *config.Config, auditLog *audit.Logger) (*Syncer, error) {
+	v, err := vault.NewClient(cfg.VaultAddress, cfg.VaultToken)
 	if err != nil {
-		return nil, fmt.Errorf("sync: create vault client: %w", err)
+		return nil, fmt.Errorf("syncer: init vault client: %w", err)
 	}
-
-	writer, err := dotenv.NewWriter(cfg.OutputFile)
+	w, err := dotenv.NewWriter(cfg.OutputFile)
 	if err != nil {
-		return nil, fmt.Errorf("sync: create writer: %w", err)
+		return nil, fmt.Errorf("syncer: init writer: %w", err)
 	}
-
-	return &Syncer{client: client, writer: writer, cfg: cfg}, nil
+	if auditLog == nil {
+		auditLog, _ = audit.NewLogger("")
+	}
+	return &Syncer{cfg: cfg, vault: v, writer: w, audit: auditLog}, nil
 }
 
-// Run performs the sync: reads secrets from Vault and writes them to the output file.
-func (s *Syncer) Run() (*Result, error) {
-	secrets, err := s.client.ReadSecrets(s.cfg.SecretPath)
+// Run performs the secret sync.
+func (s *Syncer) Run() error {
+	secrets, err := s.vault.ReadSecrets(s.cfg.SecretPath)
 	if err != nil {
-		return nil, fmt.Errorf("sync: read secrets: %w", err)
+		_ = s.audit.LogError(s.cfg.SecretPath, err)
+		return fmt.Errorf("syncer: read secrets: %w", err)
 	}
-
 	if err := s.writer.Write(secrets); err != nil {
-		return nil, fmt.Errorf("sync: write secrets: %w", err)
+		_ = s.audit.LogError(s.cfg.SecretPath, err)
+		return fmt.Errorf("syncer: write env: %w", err)
 	}
-
-	return &Result{
-		SecretsCount: len(secrets),
-		OutputFile:   s.cfg.OutputFile,
-	}, nil
+	_ = s.audit.LogSync(s.cfg.SecretPath, s.cfg.OutputFile, len(secrets))
+	return nil
 }

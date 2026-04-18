@@ -1,73 +1,78 @@
-package sync
+package sync_test
 
 import (
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/vaultpipe/internal/config"
+	"github.com/yourusername/vaultpipe/internal/audit"
+	"github.com/yourusername/vaultpipe/internal/config"
+	"github.com/yourusername/vaultpipe/internal/sync"
 )
 
-func newMockVault(t *testing.T, data map[string]string) *httptest.Server {
+type mockVault struct {
+	secrets map[string]string
+	err     error
+}
+
+func (m *mockVault) ReadSecrets(_ string) (map[string]string, error) {
+	return m.secrets, m.err
+}
+
+func newTestConfig(t *testing.T) *config.Config {
 	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		payload := map[string]interface{}{
-			"data": data,
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(payload)
-	}))
+	return &config.Config{
+		VaultAddress: "http://127.0.0.1:8200",
+		VaultToken:   "root",
+		SecretPath:   "secret/myapp",
+		OutputFile:   filepath.Join(t.TempDir(), ".env"),
+	}
 }
 
 func TestRun_WritesSecrets(t *testing.T) {
-	srv := newMockVault(t, map[string]string{"KEY": "value"})
-	defer srv.Close()
+	cfg := newTestConfig(t)
+	auditLog, _ := audit.NewLogger(filepath.Join(t.TempDir(), "audit.log"))
 
-	tmpDir := t.TempDir()
-	output := filepath.Join(tmpDir, ".env")
-
-	cfg := &config.Config{
-		VaultAddress: srv.URL,
-		VaultToken:   "test-token",
-		SecretPath:   "secret/app",
-		OutputFile:   output,
-	}
-
-	syncer, err := New(cfg)
+	s, err := sync.New(cfg, auditLog)
 	if err != nil {
-		t.Fatalf("New() error: %v", err)
+		t.Fatalf("New error: %v", err)
 	}
+	s.SetVault(&mockVault{secrets: map[string]string{"KEY": "value"}})
 
-	result, err := syncer.Run()
+	if err := s.Run(); err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if _, err := os.Stat(cfg.OutputFile); err != nil {
+		t.Errorf("output file not created: %v", err)
+	}
+}
+
+func TestRun_VaultError_LogsAndReturns(t *testing.T) {
+	cfg := newTestConfig(t)
+	auditPath := filepath.Join(t.TempDir(), "audit.log")
+	auditLog, _ := audit.NewLogger(auditPath)
+
+	s, err := sync.New(cfg, auditLog)
 	if err != nil {
-		t.Fatalf("Run() error: %v", err)
+		t.Fatalf("New error: %v", err)
 	}
+	s.SetVault(&mockVault{err: errors.New("vault down")})
 
-	if result.SecretsCount != 1 {
-		t.Errorf("expected 1 secret, got %d", result.SecretsCount)
+	if err := s.Run(); err == nil {
+		t.Fatal("expected error from Run")
 	}
-	if result.OutputFile != output {
-		t.Errorf("unexpected output file: %s", result.OutputFile)
-	}
-
-	if _, err := os.Stat(output); os.IsNotExist(err) {
-		t.Error("output file was not created")
+	info, _ := os.Stat(auditPath)
+	if info == nil || info.Size() == 0 {
+		t.Error("expected audit log entry on error")
 	}
 }
 
 func TestRun_InvalidVaultAddress(t *testing.T) {
-	cfg := &config.Config{
-		VaultAddress: "://bad-url",
-		VaultToken:   "token",
-		SecretPath:   "secret/app",
-		OutputFile:   filepath.Join(t.TempDir(), ".env"),
-	}
-
-	_, err := New(cfg)
+	cfg := newTestConfig(t)
+	cfg.VaultAddress = "://bad"
+	_, err := sync.New(cfg, nil)
 	if err == nil {
-		t.Error("expected error for invalid vault address")
+		t.Fatal("expected error for invalid vault address")
 	}
 }
