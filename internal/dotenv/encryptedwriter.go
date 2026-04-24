@@ -10,6 +10,10 @@ import (
 // WriteEncrypted writes secrets to path with sensitive values AES-GCM encrypted.
 // Non-sensitive keys are written as plain text. key must be 32 bytes.
 func WriteEncrypted(path string, secrets map[string]string, key []byte) error {
+	if len(key) != 32 {
+		return fmt.Errorf("encryption key must be 32 bytes, got %d", len(key))
+	}
+
 	keys := make([]string, 0, len(secrets))
 	for k := range secrets {
 		keys = append(keys, k)
@@ -34,7 +38,12 @@ func WriteEncrypted(path string, secrets map[string]string, key []byte) error {
 }
 
 // ReadEncrypted reads a file written by WriteEncrypted, decrypting enc: prefixed values.
+// key must be 32 bytes.
 func ReadEncrypted(path string, key []byte) (map[string]string, error) {
+	if len(key) != 32 {
+		return nil, fmt.Errorf("encryption key must be 32 bytes, got %d", len(key))
+	}
+
 	raw, err := Read(path)
 	if err != nil {
 		return nil, err
