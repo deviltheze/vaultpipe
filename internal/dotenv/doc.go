@@ -1,6 +1,7 @@
-// Package dotenv provides utilities for reading, writing, merging, diffing,
-// validating, encrypting, backing up, watching, and templating .env files.
+// Package dotenv provides utilities for reading, writing, transforming,
+// and managing .env files used by vaultpipe.
 //
-// It also supports checksum verification, secret redaction, key rotation,
-// and TTL-based freshness tracking for synced secrets.
+// Sub-features include merging, diffing, encrypting, backing up, rotating,
+// validating, filtering, masking, formatting, snapshotting, pinning,
+// expiring, annotating, aliasing, and more.
 package dotenv
