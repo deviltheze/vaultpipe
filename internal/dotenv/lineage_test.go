@@ -49,6 +49,10 @@ func TestWriteAndReadLineage_RoundTrip(t *testing.T) {
 	if got.Meta["env"] != "production" {
 		t.Errorf("Meta[env]: got %q, want %q", got.Meta["env"], "production")
 	}
+	// Verify timestamp round-trips correctly when truncated to second precision.
+	if !got.Timestamp.Equal(rec.Timestamp) {
+		t.Errorf("Timestamp: got %v, want %v", got.Timestamp, rec.Timestamp)
+	}
 }
 
 func TestWriteLineage_AppendsMultiple(t *testing.T) {
@@ -73,6 +77,12 @@ func TestWriteLineage_AppendsMultiple(t *testing.T) {
 	}
 	if len(records) != 3 {
 		t.Errorf("expected 3 records, got %d", len(records))
+	}
+	// Verify the Added field increments correctly across appended records.
+	for i, r := range records {
+		if r.Added != i {
+			t.Errorf("records[%d].Added: got %d, want %d", i, r.Added, i)
+		}
 	}
 }
 
