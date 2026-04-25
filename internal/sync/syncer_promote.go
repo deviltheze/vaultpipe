@@ -17,12 +17,18 @@ type PromoteConfig struct {
 
 // RunPromotion promotes secrets from a source .env file to a target .env file.
 // It logs the result and returns an error if the promotion fails.
+//
+// When DryRun is true, no changes are written to disk; the result still
+// reflects what would have been promoted or skipped.
 func RunPromotion(cfg PromoteConfig, logger *slog.Logger) error {
 	if cfg.SourceFile == "" {
 		return fmt.Errorf("promote: source file must be specified")
 	}
 	if cfg.TargetFile == "" {
 		return fmt.Errorf("promote: target file must be specified")
+	}
+	if cfg.SourceFile == cfg.TargetFile {
+		return fmt.Errorf("promote: source and target files must be different")
 	}
 
 	opts := dotenv.PromoteOptions{
